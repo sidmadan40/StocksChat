@@ -9,7 +9,7 @@ graphviz
 lxml
 groq
 google-genai
-alpaca-trade-api
+alpaca-trade-api==3.2.0
 langchain
 langchain-core
 python-dotenv
