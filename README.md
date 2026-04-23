@@ -1,5 +1,8 @@
 # StocksChat
 
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+![Deploy Status](https://img.shields.io/badge/Deploy%20Status-Railway%20Configured-0B0D0E?logo=railway&logoColor=white)
+
 StocksChat is an AI trading copilot with a Streamlit frontend and FastAPI backend. It explains paper trades using logged signals (sentiment, regime, confidence), answers portfolio questions in plain English, and runs an automated trade cycle over a broad stock universe.
 
 ## Features
@@ -18,6 +21,10 @@ StocksChat is an AI trading copilot with a Streamlit frontend and FastAPI backen
 - start_backend.sh: backend start command for deployment
 - start_frontend.sh: frontend start command for deployment
 
+## Architecture
+
+![StocksChat Architecture](screenshots/03-architecture.png)
+
 ## Screenshots
 
 ### Home Dashboard
@@ -29,6 +36,12 @@ StocksChat is an AI trading copilot with a Streamlit frontend and FastAPI backen
 Query: Why did we buy Netflix?
 
 ![StocksChat Query Response](screenshots/02-query-response.png)
+
+## Demo GIF
+
+Quick chat flow demo (home -> query -> response):
+
+![StocksChat Demo](screenshots/04-demo-chat-flow.gif)
 
 ## Local Setup
 
