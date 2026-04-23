@@ -2,8 +2,6 @@ import os
 import json
 from groq import Groq
 
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
 SYSTEM_PROMPT = """You are a financial assistant that classifies user queries about stocks.
 
 Given a user prompt, extract the following and return ONLY valid JSON (no markdown, no explanation):

@@ -1,4 +1,6 @@
 import os
+import sys
+import types
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -10,14 +12,19 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from .utils import get_stock_data, get_correlation_heatmap
-from .graph import build_stock_state_graph, create_initial_state
-from .portfolio import Portfolio
-from .router import route_query
-from .trading import start_trading_scheduler, stop_trading_scheduler
-from .trading import get_portfolio as get_alpaca_portfolio
-from .config import validate_required_config
-from .gemini_client import get_gemini_client, select_gemini_model
+if __package__ in (None, ""):
+    backend_package = types.ModuleType("backend")
+    backend_package.__path__ = [str(Path(__file__).resolve().parent)]
+    sys.modules.setdefault("backend", backend_package)
+
+from backend.utils import get_stock_data, get_correlation_heatmap
+from backend.graph import build_stock_state_graph, create_initial_state
+from backend.portfolio import Portfolio
+from backend.router import route_query
+from backend.trading import start_trading_scheduler, stop_trading_scheduler
+from backend.trading import get_portfolio as get_alpaca_portfolio
+from backend.config import validate_required_config
+from backend.gemini_client import get_gemini_client, select_gemini_model
 
 from typing import List
 
