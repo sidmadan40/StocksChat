@@ -17,3 +17,4 @@ langchain-core
 python-dotenv
 httpx
 apscheduler
+hmmlearn
