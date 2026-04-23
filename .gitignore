@@ -1,0 +1,27 @@
+# Environment and secret config files
+.env
+.env.*
+*.env
+
+# Generic secret/certificate files
+*.key
+*.pem
+*.p12
+*.pfx
+*.secrets
+*.secrets.*
+secrets.*
+credentials*.json
+service-account*.json
+
+# Local virtual environments
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Large data caches (regenerated on startup)
+backend/data/trading_universe.json
