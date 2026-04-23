@@ -26,3 +26,7 @@ __pycache__/
 
 # Large data caches (regenerated on startup)
 backend/data/trading_universe.json
+
+# Runtime-generated trading state/logs (must not be baked into deploy image)
+backend/data/trades.json
+backend/data/trading_cycle_state.json
