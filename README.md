@@ -5,10 +5,17 @@
 
 StocksChat is an AI trading copilot with a Streamlit frontend and FastAPI backend. It explains paper trades using logged signals (sentiment, regime, confidence), answers portfolio questions in plain English, and runs an automated trade cycle over a broad stock universe.
 
+StocksChat uses a practical retrieval-augmented generation (RAG) pattern and LangGraph orchestration:
+
+- RAG: portfolio state, recent trade logs, and market-news snippets are retrieved at query time and injected into prompts so responses are grounded in current account context.
+- LangGraph: the stock-analysis/trading pipeline is modeled as a graph-based workflow that passes state across analysis steps before generating a trade decision.
+
 ## Features
 
 - AI chat for analysis, portfolio, correlation, and trade-decision questions
 - Explainable trade context from recent logs (action, reason, confidence)
+- Retrieval-augmented responses grounded in live portfolio, recent trades, and market news
+- LangGraph-powered stateful analysis workflow for stock decisioning
 - Live Alpaca paper portfolio panel
 - Automated screening and paper-trade execution flow
 - Cloud-ready deployment (Railway)
@@ -24,6 +31,55 @@ StocksChat is an AI trading copilot with a Streamlit frontend and FastAPI backen
 ## Architecture
 
 ![StocksChat Architecture](screenshots/03-architecture.png)
+
+### LangGraph Flow Chart
+
+```mermaid
+flowchart TD
+	A[Start: User Query / Scheduled Cycle] --> B[Load State]
+	B --> C[Retrieve Context]
+	C --> C1[Portfolio Snapshot]
+	C --> C2[Recent Trade Logs]
+	C --> C3[Market News]
+
+	C1 --> D[LangGraph Analysis Graph]
+	C2 --> D
+	C3 --> D
+
+	D --> E[Sentiment Analysis]
+	D --> F[Market Regime Detection]
+	D --> G[Technical/Signal Aggregation]
+
+	E --> H[Decision Node]
+	F --> H
+	G --> H
+
+	H --> I{Action}
+	I -->|BUY/SELL| J[Paper Trade via Alpaca]
+	I -->|HOLD| K[No Trade]
+
+	J --> L[Log Decision + Explanation]
+	K --> L
+	L --> M[Chat/Endpoint Response]
+```
+
+### LangGraph Workflow
+
+1. StocksChat initializes a state object for a ticker or a shortlisted universe.
+2. The LangGraph graph runs node-by-node analysis (signals, sentiment, regime, and decision logic).
+3. Node outputs are merged into a single decision payload with confidence and reasoning.
+4. The workflow executes BUY/SELL/HOLD behavior and logs a full explanation for later audit.
+5. The final state is returned to API/chat consumers for user-facing responses.
+
+### How RAG Is Used
+
+StocksChat applies RAG at runtime by retrieving current domain context before generation:
+
+- Portfolio retrieval: live cash, positions, value, and P&L are fetched from Alpaca.
+- Trade-log retrieval: recent trade decisions, confidence, sentiment, regime, and explanation are loaded.
+- News retrieval: latest ticker-specific news headlines are pulled and summarized.
+
+This retrieved context is embedded into the chat/system prompt so model outputs are grounded in your latest account/trading state rather than generic market text.
 
 ## Screenshots
 
@@ -90,7 +146,7 @@ Use two Railway services from the same repo:
 Set these backend env vars in Railway:
 
 - GEMINI_API_KEY
-- GROQ_API_KEY
+- GROQ_API_KEY (optional, only needed for the `/route` classifier endpoint)
 - APCA_API_KEY_ID
 - APCA_API_SECRET_KEY
 - APCA_API_BASE_URL
