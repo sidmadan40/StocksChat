@@ -220,35 +220,79 @@ def build_analysis_snapshot(ticker: str):
         hist = stock.history(period="6mo")
         news_items = []
 
-        for article in (stock.news or [])[:3]:
-            if not isinstance(article, dict):
-                continue
-            content = article.get("content", {})
-            news_items.append({
-                "title": content.get("title", "Untitled article"),
-                "summary": content.get("summary") or "No summary available.",
-                "link": content.get("clickThroughUrl", {}).get("url"),
-            })
+        # Get news
+        try:
+            for article in (stock.news or [])[:3]:
+                if not isinstance(article, dict):
+                    continue
+                content = article.get("content", {})
+                news_items.append({
+                    "title": content.get("title", "Untitled article"),
+                    "summary": content.get("summary") or "No summary available.",
+                    "link": content.get("clickThroughUrl", {}).get("url"),
+                })
+        except Exception as e:
+            print(f"News fetch error for {ticker}: {e}")
 
+        # Price chart - 6 months
         price_chart = None
-        if not hist.empty:
-            fig = px.line(hist, x=hist.index, y="Close", title=f"{ticker} price over 6 months")
-            fig.update_layout(
-                paper_bgcolor="rgba(10, 15, 44, 0.5)",
-                plot_bgcolor="rgba(10, 15, 44, 0.3)",
-                font=dict(color="#facc15"),
-            )
-            price_chart = fig.to_json()
+        try:
+            if not hist.empty and len(hist) > 0:
+                fig = px.line(
+                    hist.reset_index(),
+                    x="Date",
+                    y="Close",
+                    title=f"{ticker} - 6 Month Price History",
+                    labels={"Close": "Price ($)", "Date": "Date"}
+                )
+                fig.update_layout(
+                    height=300,
+                    paper_bgcolor="rgba(10, 15, 44, 0.5)",
+                    plot_bgcolor="rgba(10, 15, 44, 0.3)",
+                    font=dict(color="#facc15", size=10),
+                    hovermode="x unified",
+                    margin=dict(l=40, r=20, t=40, b=40)
+                )
+                fig.update_xaxes(gridcolor="#1e293b")
+                fig.update_yaxes(gridcolor="#1e293b")
+                price_chart = fig.to_json()
+        except Exception as e:
+            print(f"Price chart error for {ticker}: {e}")
 
-        stats_rows = [
-            {"Metric": "Current Price", "Value": str(info.get("currentPrice", "N/A"))},
-            {"Metric": "Market Cap", "Value": str(info.get("marketCap", "N/A"))},
-            {"Metric": "PE Ratio", "Value": str(info.get("trailingPE", "N/A"))},
-            {"Metric": "Sector", "Value": str(info.get("sector", "N/A"))},
-        ]
+        # Key stats
+        stats_rows = []
+        try:
+            current_price = info.get("currentPrice", 0)
+            if current_price:
+                stats_rows.append({"Metric": "Current Price", "Value": f"${current_price:.2f}"})
+            
+            market_cap = info.get("marketCap")
+            if market_cap:
+                if market_cap >= 1e12:
+                    stats_rows.append({"Metric": "Market Cap", "Value": f"${market_cap/1e12:.1f}T"})
+                elif market_cap >= 1e9:
+                    stats_rows.append({"Metric": "Market Cap", "Value": f"${market_cap/1e9:.1f}B"})
+            
+            pe = info.get("trailingPE")
+            if pe:
+                stats_rows.append({"Metric": "P/E Ratio", "Value": f"{pe:.2f}"})
+            
+            sector = info.get("sector")
+            if sector:
+                stats_rows.append({"Metric": "Sector", "Value": sector})
+            
+            if len(hist) > 0:
+                latest = hist["Close"].iloc[-1]
+                prev = hist["Close"].iloc[-5] if len(hist) > 5 else hist["Close"].iloc[0]
+                if prev > 0:
+                    change_pct = ((latest - prev) / prev) * 100
+                    stats_rows.append({"Metric": "5D Change", "Value": f"{change_pct:+.2f}%"})
+        except Exception as e:
+            print(f"Stats error for {ticker}: {e}")
 
         return price_chart, stats_rows, news_items
-    except Exception:
+    except Exception as e:
+        print(f"Analysis snapshot error for {ticker}: {e}")
         return None, [], []
 
 
@@ -258,128 +302,106 @@ if "pnl_history" not in st.session_state:
 
 
 def show_portfolio_panel():
-    """Display live Alpaca portfolio with cash, positions, and PnL trend."""
-    st.subheader("💼 Live Alpaca Portfolio")
+    """Display live Alpaca portfolio with cash, positions, pie chart, and stock list."""
+    st.subheader("💼 Portfolio Status")
     
-    with st.spinner("Loading Alpaca portfolio..."):
+    with st.spinner("Loading portfolio..."):
         data, error = safe_api_call(PORTFOLIO_LIVE_API_URL)
     
     if error:
-        st.error(f"❌ Portfolio Error: {error}")
+        st.error(f"❌ Error: {error}")
         return
     
-    if data["status"] != "success":
-        st.error(f"❌ Portfolio Error: {data.get('error', 'Unknown error')}")
+    if not data or data.get("status") != "success":
+        st.error(f"❌ Error: {data.get('error', 'Unknown error') if data else 'No data'}")
         return
     
-    portfolio = data["data"]
+    portfolio = data.get("data", {})
+    if not portfolio:
+        st.error("No portfolio data available")
+        return
     
-    # (1) Cash and PnL metrics
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        cash = portfolio.get("cash", 0.0)
-        st.metric("💰 Cash", f"${cash:,.2f}")
-    
-    with col2:
-        pnl_data = portfolio.get("pnl", {})
-        total_pnl = pnl_data.get("total", 0.0)
-        pnl_percent = pnl_data.get("percent", 0.0)
-        color = "🟢" if total_pnl >= 0 else "🔴"
-        st.metric(f"{color} P&L", f"${total_pnl:,.2f}", f"{pnl_percent:.2f}%")
-    
-    # Track PnL history for trend
-    st.session_state.pnl_history.append({
-        "timestamp": datetime.now(),
-        "pnl": total_pnl
-    })
-    # Keep only last 50 points
-    if len(st.session_state.pnl_history) > 50:
-        st.session_state.pnl_history = st.session_state.pnl_history[-50:]
-    
-    st.markdown("---")
-    
-    # (2) Pie chart for allocation
+    cash = portfolio.get("cash", 0.0)
     positions = portfolio.get("positions", [])
+    pnl_data = portfolio.get("pnl", {})
+    total_pnl = pnl_data.get("total", 0.0)
+    pnl_percent = pnl_data.get("percent", 0.0)
     
-    if positions:
-        # Build allocation data
-        labels = ["💰 Cash"]
-        values = [cash]
-        colors = ["#64748b"]
-        
-        for pos in positions:
-            ticker = pos.get("ticker", "Unknown")
-            pnl = pos.get("pnl", 0.0)
-            market_value = pos.get("current_price", 0) * pos.get("qty", 0)
-            labels.append(ticker)
-            values.append(market_value)
-            colors.append("#10b981" if pnl >= 0 else "#ef4444")
-        
-        # Create pie chart
-        fig_pie = go.Figure(data=[go.Pie(
-            labels=labels,
-            values=values,
-            marker=dict(colors=colors),
-            hovertemplate="<b>%{label}</b><br>Value: $%{value:.2f}<extra></extra>"
-        )])
-        fig_pie.update_layout(
-            title="Portfolio Allocation",
-            height=300,
-            margin=dict(l=0, r=0, t=30, b=0),
-            paper_bgcolor="rgba(10, 15, 44, 0.5)",
-            font=dict(color="#facc15")
-        )
-        st.plotly_chart(fig_pie, width="stretch", key="portfolio_pie")
+    # Calculate total portfolio value
+    total_value = cash
+    for pos in positions:
+        total_value += pos.get("current_price", 0) * pos.get("qty", 0)
+    
+    # (1) Top metrics
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("💰 Cash", f"${cash:,.0f}")
+    with col2:
+        color = "🟢" if total_pnl >= 0 else "🔴"
+        st.metric(f"{color} P&L", f"${total_pnl:,.0f}")
+    
+    st.metric("📊 Total Value", f"${total_value:,.0f}", delta=f"{pnl_percent:.2f}%")
+    
+    st.markdown("---")
+    
+    # (2) Pie chart - only if there are positions
+    if positions and len(positions) > 0:
+        try:
+            labels = ["Cash"]
+            values = [cash]
+            colors = ["#64748b"]
+            
+            for pos in positions:
+                ticker = pos.get("ticker", "Unknown")
+                market_value = pos.get("current_price", 0) * pos.get("qty", 0)
+                pnl = pos.get("pnl", 0.0)
+                labels.append(ticker)
+                values.append(market_value)
+                colors.append("#10b981" if pnl >= 0 else "#ef4444")
+            
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=labels,
+                values=values,
+                marker=dict(colors=colors),
+                textposition="inside",
+                textinfo="label+percent",
+                hovertemplate="<b>%{label}</b><br>Value: $%{value:,.0f}<extra></extra>"
+            )])
+            fig_pie.update_layout(
+                title_text="Asset Allocation",
+                height=250,
+                margin=dict(l=10, r=10, t=40, b=10),
+                paper_bgcolor="rgba(10, 15, 44, 0.5)",
+                plot_bgcolor="rgba(10, 15, 44, 0.3)",
+                font=dict(color="#facc15", size=11),
+                showlegend=False
+            )
+            st.plotly_chart(fig_pie, use_container_width=True, key=f"portfolio_pie_{datetime.now().timestamp()}")
+        except Exception as e:
+            st.warning(f"Chart error: {str(e)[:100]}")
     else:
-        st.info("No open positions.")
+        st.info("No positions held")
     
     st.markdown("---")
     
-    # (3) PnL Trend Line
-    if len(st.session_state.pnl_history) > 1:
-        history_df = st.session_state.pnl_history
-        fig_trend = go.Figure()
-        fig_trend.add_trace(go.Scatter(
-            x=[h["timestamp"] for h in history_df],
-            y=[h["pnl"] for h in history_df],
-            mode="lines+markers",
-            name="P&L",
-            line=dict(color="#10b981", width=2),
-            marker=dict(size=4)
-        ))
-        fig_trend.update_layout(
-            title="P&L Trend",
-            xaxis_title="Time",
-            yaxis_title="P&L ($)",
-            height=250,
-            margin=dict(l=50, r=20, t=30, b=50),
-            hovermode="x unified",
-            paper_bgcolor="rgba(10, 15, 44, 0.5)",
-            plot_bgcolor="rgba(10, 15, 44, 0.3)",
-            font=dict(color="#facc15"),
-            xaxis=dict(gridcolor="#1e293b"),
-            yaxis=dict(gridcolor="#1e293b")
-        )
-        st.plotly_chart(fig_trend, width="stretch", key="pnl_trend")
-    
-    st.markdown("---")
-    
-    # (4) Positions table
-    if positions:
-        st.subheader("📋 Open Positions")
-        position_data = []
+    # (3) Holdings list
+    if positions and len(positions) > 0:
+        st.subheader("📋 Holdings")
+        holdings_data = []
         for pos in positions:
-            position_data.append({
+            holdings_data.append({
                 "Ticker": pos.get("ticker", "N/A"),
                 "Qty": f"{pos.get('qty', 0):.0f}",
-                "Avg Price": f"${pos.get('avg_fill_price', 0):.2f}",
-                "Current Price": f"${pos.get('current_price', 0):.2f}",
-                "P&L": f"${pos.get('pnl', 0):.2f}",
-                "P&L %": f"{pos.get('pnl_percent', 0):.2f}%"
+                "Price": f"${pos.get('current_price', 0):.2f}",
+                "Value": f"${pos.get('current_price', 0) * pos.get('qty', 0):,.0f}",
+                "P&L": f"${pos.get('pnl', 0):,.0f}",
+                "Return": f"{pos.get('pnl_percent', 0):.1f}%"
             })
         
-        st.dataframe(position_data, width="stretch", hide_index=True)
+        try:
+            st.dataframe(holdings_data, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.warning(f"Table error: {str(e)[:100]}")
 
 
 def show_latest_trades_panel():
@@ -574,34 +596,66 @@ with left:
     # Show chat history
     for idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
+            # Main message text
             st.markdown(message["content"])
 
-            if "chart" in message:
-                fig = pio.from_json(message["chart"])
-                st.plotly_chart(fig, key=f"chat_chart_{idx}")
+            # Portfolio allocation chart (from analyze endpoint)
+            if "chart" in message and message["chart"]:
+                try:
+                    fig = pio.from_json(message["chart"])
+                    st.plotly_chart(fig, use_container_width=True, key=f"chart_{idx}_{datetime.now().timestamp()}")
+                except Exception as e:
+                    st.warning(f"Chart rendering failed: {str(e)[:100]}")
 
-            if "stats_table" in message and message["stats_table"]:
-                st.dataframe(message["stats_table"], width="stretch", hide_index=True)
-
+            # Stock price chart (6-month historical)
             if "price_chart" in message and message["price_chart"]:
-                fig = pio.from_json(message["price_chart"])
-                st.plotly_chart(fig, key=f"chat_price_chart_{idx}")
+                try:
+                    fig = pio.from_json(message["price_chart"])
+                    st.plotly_chart(fig, use_container_width=True, key=f"price_chart_{idx}_{datetime.now().timestamp()}")
+                except Exception as e:
+                    st.warning(f"Price chart rendering failed: {str(e)[:100]}")
 
+            # Key statistics table
+            if "stats_table" in message and message["stats_table"]:
+                st.caption("📈 Key Statistics")
+                try:
+                    st.dataframe(message["stats_table"], use_container_width=True, hide_index=True)
+                except Exception as e:
+                    st.warning(f"Stats table rendering failed: {str(e)[:100]}")
+
+            # News snippets
             if "news_items" in message and message["news_items"]:
-                st.caption("Recent news snippets")
+                st.caption("📰 Related News")
                 for article in message["news_items"]:
                     with st.expander(article.get("title", "Latest news")):
                         st.write(article.get("summary", "No summary available."))
                         link = article.get("link")
                         if link:
-                            st.markdown(f"[Read full article]({link})")
+                            st.markdown(f"[Read full article →]({link})")
 
-            if "trace" in message:
-                with st.expander("Show reasoning"):
-                    for step in message["trace"]:
-                        st.write(f"**{step['step']}**")
-                        st.write(f"Output: {step.get('output')}")
-                        st.write("---")
+            # Reasoning trace (LangGraph steps)
+            if "trace" in message and message["trace"]:
+                with st.expander("🧠 Show Reasoning (LangGraph Steps)"):
+                    try:
+                        for step in message["trace"]:
+                            step_name = step.get('step', 'Unknown')
+                            st.subheader(f"📍 {step_name.title()}")
+                            
+                            # Input
+                            if step.get('input'):
+                                with st.container():
+                                    st.write("**Input:**")
+                                    st.json(step['input'])
+                            
+                            # Output
+                            if step.get('output'):
+                                with st.container():
+                                    st.write("**Output:**")
+                                    st.json(step['output'])
+                            
+                            st.divider()
+                    except Exception as e:
+                        st.warning(f"Trace rendering failed: {str(e)[:100]}")
 
     # Chat input
     if prompt := st.chat_input("Ask about stocks..."):
@@ -618,7 +672,7 @@ with left:
 
         if is_trade_decision_query(prompt):
             resolved_ticker = resolve_query_ticker(prompt, tickers)
-            with st.spinner("Thinking..."):
+            with st.spinner("Analyzing..."):
                 chat_data, chat_error = safe_api_call(
                     CHAT_API_URL,
                     method="POST",
@@ -631,14 +685,36 @@ with left:
                     "content": f"⚠️ Chat service is unavailable right now: {chat_error}"
                 })
             else:
-                price_chart, stats_rows, news_items = build_analysis_snapshot(resolved_ticker) if resolved_ticker else (None, [], [])
-                st.session_state.messages.append({
+                msg = {
                     "role": "assistant",
                     "content": chat_data.get("response", "No response generated."),
-                    "price_chart": price_chart,
-                    "stats_table": stats_rows,
-                    "news_items": news_items,
-                })
+                }
+                
+                # Add analysis snapshot if we found a ticker
+                if resolved_ticker:
+                    try:
+                        price_chart, stats_rows, news_items = build_analysis_snapshot(resolved_ticker)
+                        if price_chart:
+                            msg["price_chart"] = price_chart
+                        if stats_rows:
+                            msg["stats_table"] = stats_rows
+                        if news_items:
+                            msg["news_items"] = news_items
+                    except Exception as e:
+                        print(f"Error building snapshot for {resolved_ticker}: {e}")
+                
+                st.session_state.messages.append(msg)
+
+        elif intent == "portfolio":
+            with st.spinner("Fetching portfolio analysis..."):
+                res = requests.get(PORTFOLIO_API_URL)
+                data = res.json()
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "📊 **Your Current Portfolio**\n\nHere's your asset allocation and portfolio composition analysis:",
+                "chart": data.get("allocation_chart")
+            })
 
         elif intent == "correlation" and len(tickers) >= 2:
             with st.spinner("Computing correlation..."):
@@ -647,19 +723,8 @@ with left:
 
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": "Here is the correlation analysis",
-                "chart": data["heatmap"]
-            })
-
-        elif intent == "portfolio":
-            with st.spinner("Fetching portfolio..."):
-                res = requests.get(PORTFOLIO_API_URL)
-                data = res.json()
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": "Here is your portfolio",
-                "chart": data["allocation_chart"]
+                "content": f"📈 **Correlation Analysis: {', '.join(tickers)}**\n\nHere's the correlation heatmap showing how these stocks move together:",
+                "chart": data.get("heatmap")
             })
 
         elif intent == "analyze" and tickers:
@@ -670,17 +735,18 @@ with left:
                 price_chart, stats_rows, news_items = build_analysis_snapshot(ticker)
 
             st.session_state.selected_ticker = ticker
-            st.session_state.page = "company"
 
-            st.session_state.messages.append({
+            # Build message with all components
+            msg = {
                 "role": "assistant",
-                "content": f"Analysis for {ticker}: decision {data.get('decision', 'HOLD')}. Here are the latest chart, key stats, reasoning trace, and recent news snippets.",
-                "chart": data["portfolio_chart"],
+                "content": f"📊 **Analysis for {ticker}**\n\nDecision: **{data.get('decision', 'HOLD')}**\n\nHere's the detailed analysis including portfolio allocation, technical indicators, and reasoning.",
+                "chart": data.get("portfolio_chart"),
                 "price_chart": price_chart,
                 "stats_table": stats_rows,
                 "news_items": news_items,
-                "trace": data["trace"]
-            })
+                "trace": data.get("trace", [])
+            }
+            st.session_state.messages.append(msg)
 
         elif intent == "compare" and len(tickers) >= 2:
             with st.spinner(f"Comparing {', '.join(tickers)}..."):
@@ -689,8 +755,8 @@ with left:
 
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": f"Comparison between {', '.join(tickers)}",
-                "chart": data["heatmap"]
+                "content": f"📊 **Comparison: {', '.join(tickers)}**\n\nHere's a correlation analysis between these stocks:",
+                "chart": data.get("heatmap")
             })
 
         else:
@@ -708,25 +774,47 @@ with left:
                     "content": f"⚠️ Chat service is unavailable right now: {chat_error}"
                 })
             else:
-                price_chart, stats_rows, news_items = build_analysis_snapshot(resolved_ticker) if resolved_ticker else (None, [], [])
-                st.session_state.messages.append({
+                msg = {
                     "role": "assistant",
                     "content": chat_data.get("response", "No response generated."),
-                    "price_chart": price_chart,
-                    "stats_table": stats_rows,
-                    "news_items": news_items,
-                })
+                }
+                
+                # Add analysis snapshot if we found a ticker
+                if resolved_ticker:
+                    try:
+                        price_chart, stats_rows, news_items = build_analysis_snapshot(resolved_ticker)
+                        if price_chart:
+                            msg["price_chart"] = price_chart
+                        if stats_rows:
+                            msg["stats_table"] = stats_rows
+                        if news_items:
+                            msg["news_items"] = news_items
+                    except Exception as e:
+                        print(f"Error building snapshot for {resolved_ticker}: {e}")
+                
+                st.session_state.messages.append(msg)
 
         st.rerun()
 
 
-# ---------------- RIGHT (STATS) ----------------
+# ---------------- RIGHT (PORTFOLIO STATS) ----------------
 with right:
-    refresh_col, _ = st.columns([1, 1])
-    with refresh_col:
-        if st.button("🔄 Refresh Position", width="stretch"):
-            st.rerun()
-
-    show_portfolio_panel()
+    st.markdown("### 💼 Portfolio")
+    
+    # Refresh button
+    if st.button("🔄 Refresh", use_container_width=True, key="refresh_portfolio"):
+        st.rerun()
+    
+    # Show portfolio with error handling
+    try:
+        show_portfolio_panel()
+    except Exception as e:
+        st.error(f"Portfolio error: {str(e)[:100]}")
+    
     st.markdown("---")
-    show_latest_trades_panel()
+    
+    # Show latest trades
+    try:
+        show_latest_trades_panel()
+    except Exception as e:
+        st.warning(f"Trades panel error: {str(e)[:100]}")

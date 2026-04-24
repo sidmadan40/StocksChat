@@ -30,7 +30,7 @@ def _default_state() -> Dict:
     return {
         "date": datetime.now().date().isoformat(),
         "executions": 0,
-        "max_per_day": 5,
+        "max_per_day": 6,
     }
 
 
@@ -48,7 +48,7 @@ def _load_state() -> Dict:
         if isinstance(raw, dict):
             state.update(raw)
         state["executions"] = int(state.get("executions", 0) or 0)
-        state["max_per_day"] = int(state.get("max_per_day", 5) or 5)
+        state["max_per_day"] = int(state.get("max_per_day", 6) or 6)
         return state
     except Exception:
         return _default_state()
@@ -646,17 +646,17 @@ def start_trading_scheduler() -> TradingScheduler:
     """
     Start the global trading scheduler with trading cycles.
     
-    Automatically schedules trading cycles to run every 2 hours,
-    limited to 5 executions per day.
+    Automatically schedules trading cycles to run every 1 hour,
+    limited to 6 executions per day.
     """
     scheduler = get_scheduler()
     
-    # Schedule trading cycles (every 2 hours, max 5/day)
+    # Schedule trading cycles (every 1 hour, max 6/day)
     try:
         existing_jobs = scheduler.get_jobs()
-        if "trading_cycle_2h" not in existing_jobs:
-            schedule_trading_cycles(scheduler, interval_hours=2)
-            logger.info("Trading cycles scheduled: every 2 hours (max 5/day)")
+        if "trading_cycle_1h" not in existing_jobs:
+            schedule_trading_cycles(scheduler, interval_hours=1)
+            logger.info("Trading cycles scheduled: every 1 hour (max 6/day)")
     except Exception as e:
         logger.error(f"Error scheduling cycles in start_trading_scheduler: {e}")
 
