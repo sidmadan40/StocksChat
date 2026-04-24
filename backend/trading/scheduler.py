@@ -183,21 +183,8 @@ def run_ai_trade_cycle() -> Dict:
         decision = candidate.get("decision", {})
         explanation = candidate.get("explanation", "")
 
-        # 5) Place trade if not HOLD
-        quantity = 0
-        if decision.get("action") != "HOLD":
-            quantity = 1
-            trade_status = place_trade(ticker, decision.get("action", "HOLD"), qty=1)
-            if trade_status.get("status") == "success":
-                register_trade_execution()
-        else:
-            trade_status = {
-                "status": "skipped",
-                "reason": "Decision action is HOLD",
-                "action": "HOLD"
-            }
-
-        # Add explanation and trade context to persistent trade log.
+        # 5) Log the decision before any broker call for auditability.
+        quantity = 1 if decision.get("action") != "HOLD" else 0
         log_trade({
             "ticker": ticker,
             "sentiment": sentiment,
@@ -208,7 +195,30 @@ def run_ai_trade_cycle() -> Dict:
             "explanation": explanation,
         })
 
-        # 6) Full debug output
+        # 6) Place trade if not HOLD
+        if decision.get("action") != "HOLD":
+            trade_status = place_trade(ticker, decision.get("action", "HOLD"), qty=1)
+            if trade_status.get("status") == "success":
+                register_trade_execution()
+        else:
+            trade_status = {
+                "status": "skipped",
+                "reason": "Decision action is HOLD",
+                "action": "HOLD"
+            }
+
+        # Log execution result as a separate event for traceability.
+        log_trade({
+            "ticker": ticker,
+            "sentiment": sentiment,
+            "regime": regime,
+            "decision": decision,
+            "action": decision.get("action", "HOLD"),
+            "quantity": quantity,
+            "explanation": f"{explanation}\nExecution status: {trade_status.get('status', 'unknown')}",
+        })
+
+        # 7) Full debug output
         print("===== AI TRADE CYCLE DEBUG =====")
         print(f"Universe Size: {len(base_universe)}")
         print(f"Shortlist: {candidate_tickers}")

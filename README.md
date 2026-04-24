@@ -53,14 +53,15 @@ flowchart TD
 	E --> H[Decision Node]
 	F --> H
 	G --> H
+	H --> L[Log Decision + Explanation]
 
-	H --> I{Action}
+	L --> I{Action}
 	I -->|BUY/SELL| J[Paper Trade via Alpaca]
 	I -->|HOLD| K[No Trade]
 
-	J --> L[Log Decision + Explanation]
-	K --> L
-	L --> M[Chat/Endpoint Response]
+	J --> N[Log Execution Result]
+	K --> N
+	N --> M[Chat/Endpoint Response]
 ```
 
 ### LangGraph Workflow
