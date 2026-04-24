@@ -385,12 +385,71 @@ def get_correlation(request: CorrelationRequest):
 
 @app.get("/portfolio")
 def get_portfolio():
-    current_portfolio = portfolio.get_portfolio()
-    allocation_chart = build_allocation_chart(current_portfolio)
-    return {
-        "portfolio": current_portfolio,
-        "allocation_chart": allocation_chart
-    }
+    """Get portfolio with allocation chart (uses live Alpaca data)."""
+    try:
+        portfolio_data = get_alpaca_portfolio()
+        
+        if "error" in portfolio_data:
+            raise RuntimeError(portfolio_data["error"])
+        
+        cash = float(portfolio_data.get("cash", 0.0))
+        positions = portfolio_data.get("positions", [])
+        total_pnl = float(portfolio_data.get("total_pnl", 0.0))
+        
+        # Build allocation chart
+        labels = []
+        values = []
+        
+        if cash > 0:
+            labels.append("Cash")
+            values.append(cash)
+        
+        for pos in positions:
+            ticker = pos.get("ticker", "Unknown")
+            market_value = float(pos.get("current_price", 0)) * float(pos.get("qty", 0))
+            if market_value > 0:
+                labels.append(ticker)
+                values.append(market_value)
+        
+        # Create pie chart
+        if labels and values:
+            fig = go.Figure(data=[go.Pie(
+                labels=labels,
+                values=values,
+                textposition="inside",
+                textinfo="label+percent",
+                hovertemplate="<b>%{label}</b><br>Value: $%{value:,.0f}<extra></extra>"
+            )])
+            fig.update_layout(
+                title_text="Portfolio Allocation",
+                height=350,
+                margin=dict(l=20, r=20, t=50, b=20),
+                paper_bgcolor="rgba(10, 15, 44, 0.5)",
+                plot_bgcolor="rgba(10, 15, 44, 0.3)",
+                font=dict(color="#facc15", size=12),
+                showlegend=True
+            )
+            allocation_chart = fig.to_json()
+        else:
+            allocation_chart = None
+        
+        return {
+            "status": "success",
+            "portfolio": {
+                "cash": cash,
+                "positions": positions,
+                "total_pnl": total_pnl,
+                "num_positions": len(positions)
+            },
+            "allocation_chart": allocation_chart
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)[:200],
+            "portfolio": {"cash": 0.0, "positions": [], "total_pnl": 0.0, "num_positions": 0},
+            "allocation_chart": None
+        }
 
 @app.get("/allocation")
 def get_allocation():
@@ -407,6 +466,8 @@ def portfolio_live():
     - cash
     - positions
     - pnl (total + percent)
+    - total_portfolio_value (from Alpaca account)
+    - invested_value (calculated from positions)
     """
     try:
         portfolio_data = get_alpaca_portfolio()
@@ -414,14 +475,28 @@ def portfolio_live():
         if "error" in portfolio_data:
             raise RuntimeError(portfolio_data["error"])
 
+        cash = float(portfolio_data.get("cash", 0.0))
+        total_portfolio_value = float(portfolio_data.get("total_portfolio_value", 0.0))
+        positions = portfolio_data.get("positions", [])
+        
+        # Calculate invested amount from positions
+        invested_value = 0.0
+        for pos in positions:
+            invested_value += float(pos.get("current_price", 0.0)) * float(pos.get("qty", 0.0))
+        
+        total_pnl = float(portfolio_data.get("total_pnl", 0.0))
+        total_pnl_percent = float(portfolio_data.get("total_pnl_percent", 0.0))
+
         return {
             "status": "success",
             "data": {
-                "cash": float(portfolio_data.get("cash", 0.0)),
-                "positions": portfolio_data.get("positions", []),
+                "cash": cash,
+                "invested_value": invested_value,
+                "total_portfolio_value": total_portfolio_value,
+                "positions": positions,
                 "pnl": {
-                    "total": float(portfolio_data.get("total_pnl", 0.0)),
-                    "percent": float(portfolio_data.get("total_pnl_percent", 0.0)),
+                    "total": total_pnl,
+                    "percent": total_pnl_percent,
                 },
             }
         }
@@ -431,6 +506,8 @@ def portfolio_live():
             "error": str(e)[:200],
             "data": {
                 "cash": 0.0,
+                "invested_value": 0.0,
+                "total_portfolio_value": 0.0,
                 "positions": [],
                 "pnl": {
                     "total": 0.0,

@@ -302,8 +302,8 @@ if "pnl_history" not in st.session_state:
 
 
 def show_portfolio_panel():
-    """Display live Alpaca portfolio with cash, positions, pie chart, and stock list."""
-    st.subheader("💼 Portfolio Status")
+    """Display live Alpaca portfolio with metrics, pie chart, and holdings list."""
+    st.subheader("💼 Portfolio")
     
     with st.spinner("Loading portfolio..."):
         data, error = safe_api_call(PORTFOLIO_LIVE_API_URL)
@@ -322,43 +322,54 @@ def show_portfolio_panel():
         return
     
     cash = portfolio.get("cash", 0.0)
+    invested_value = portfolio.get("invested_value", 0.0)
+    total_portfolio_value = portfolio.get("total_portfolio_value", 0.0)
     positions = portfolio.get("positions", [])
     pnl_data = portfolio.get("pnl", {})
     total_pnl = pnl_data.get("total", 0.0)
     pnl_percent = pnl_data.get("percent", 0.0)
     
-    # Calculate total portfolio value
-    total_value = cash
-    for pos in positions:
-        total_value += pos.get("current_price", 0) * pos.get("qty", 0)
-    
-    # (1) Top metrics
+    # (1) Top metrics - reorganized
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("💰 Cash", f"${cash:,.0f}")
+        st.metric("💰 Cash Reserve", f"${cash:,.0f}")
     with col2:
-        color = "🟢" if total_pnl >= 0 else "🔴"
-        st.metric(f"{color} P&L", f"${total_pnl:,.0f}")
+        st.metric("📊 Invested", f"${invested_value:,.0f}")
     
-    st.metric("📊 Total Value", f"${total_value:,.0f}", delta=f"{pnl_percent:.2f}%")
+    col3, col4 = st.columns(2)
+    with col3:
+        st.metric("📈 Portfolio Value", f"${total_portfolio_value:,.0f}")
+    with col4:
+        color = "🟢" if total_pnl >= 0 else "🔴"
+        st.metric(f"{color} Gain/Loss", f"${total_pnl:,.0f}", delta=f"{pnl_percent:.2f}%")
     
     st.markdown("---")
     
-    # (2) Pie chart - only if there are positions
-    if positions and len(positions) > 0:
-        try:
-            labels = ["Cash"]
-            values = [cash]
-            colors = ["#64748b"]
+    # (2) Pie chart - always show, even with no positions
+    try:
+        labels = []
+        values = []
+        colors = []
+        
+        # Add cash
+        if cash > 0:
+            labels.append("Cash Reserve")
+            values.append(cash)
+            colors.append("#64748b")
+        
+        # Add positions
+        for pos in positions:
+            ticker = pos.get("ticker", "Unknown")
+            market_value = float(pos.get("current_price", 0)) * float(pos.get("qty", 0))
+            pnl = float(pos.get("pnl", 0.0))
             
-            for pos in positions:
-                ticker = pos.get("ticker", "Unknown")
-                market_value = pos.get("current_price", 0) * pos.get("qty", 0)
-                pnl = pos.get("pnl", 0.0)
+            if market_value > 0:  # Only add if there's value
                 labels.append(ticker)
                 values.append(market_value)
                 colors.append("#10b981" if pnl >= 0 else "#ef4444")
-            
+        
+        # Create pie chart if we have data
+        if labels and values:
             fig_pie = go.Figure(data=[go.Pie(
                 labels=labels,
                 values=values,
@@ -369,7 +380,7 @@ def show_portfolio_panel():
             )])
             fig_pie.update_layout(
                 title_text="Asset Allocation",
-                height=250,
+                height=280,
                 margin=dict(l=10, r=10, t=40, b=10),
                 paper_bgcolor="rgba(10, 15, 44, 0.5)",
                 plot_bgcolor="rgba(10, 15, 44, 0.3)",
@@ -377,31 +388,34 @@ def show_portfolio_panel():
                 showlegend=False
             )
             st.plotly_chart(fig_pie, use_container_width=True, key=f"portfolio_pie_{datetime.now().timestamp()}")
-        except Exception as e:
-            st.warning(f"Chart error: {str(e)[:100]}")
-    else:
-        st.info("No positions held")
+        else:
+            st.info("⚠️ No portfolio data available yet")
+    except Exception as e:
+        st.warning(f"Chart error: {str(e)[:100]}")
     
     st.markdown("---")
     
-    # (3) Holdings list
+    # (3) Holdings list - show if there are positions
     if positions and len(positions) > 0:
         st.subheader("📋 Holdings")
         holdings_data = []
         for pos in positions:
+            market_val = float(pos.get("current_price", 0)) * float(pos.get("qty", 0))
             holdings_data.append({
-                "Ticker": pos.get("ticker", "N/A"),
-                "Qty": f"{pos.get('qty', 0):.0f}",
-                "Price": f"${pos.get('current_price', 0):.2f}",
-                "Value": f"${pos.get('current_price', 0) * pos.get('qty', 0):,.0f}",
-                "P&L": f"${pos.get('pnl', 0):,.0f}",
-                "Return": f"{pos.get('pnl_percent', 0):.1f}%"
+                "🔹 Ticker": pos.get("ticker", "N/A"),
+                "Qty": f"{float(pos.get('qty', 0)):.0f}",
+                "Price": f"${float(pos.get('current_price', 0)):.2f}",
+                "Value": f"${market_val:,.0f}",
+                "P&L": f"${float(pos.get('pnl', 0)):,.0f}",
+                "Return": f"{float(pos.get('pnl_percent', 0)):.1f}%"
             })
         
         try:
             st.dataframe(holdings_data, use_container_width=True, hide_index=True)
         except Exception as e:
             st.warning(f"Table error: {str(e)[:100]}")
+    else:
+        st.info("📌 No open positions. Portfolio is in cash.")
 
 
 def show_latest_trades_panel():
@@ -706,14 +720,32 @@ with left:
                 st.session_state.messages.append(msg)
 
         elif intent == "portfolio":
-            with st.spinner("Fetching portfolio analysis..."):
-                res = requests.get(PORTFOLIO_API_URL)
-                data = res.json()
-
+            with st.spinner("Fetching portfolio..."):
+                try:
+                    res = requests.get(PORTFOLIO_API_URL, timeout=10)
+                    data = res.json()
+                except Exception as e:
+                    data = {"status": "error", "error": str(e)}
+            
+            portfolio_info = data.get("portfolio", {})
+            num_positions = portfolio_info.get("num_positions", 0)
+            
+            if num_positions > 0:
+                content = f"📊 **Your Portfolio**\n\nYou currently own **{num_positions} position(s)**:\n\n"
+                for pos in portfolio_info.get("positions", []):
+                    ticker = pos.get("ticker", "?")
+                    qty = float(pos.get("qty", 0))
+                    price = float(pos.get("current_price", 0))
+                    value = qty * price
+                    pnl = float(pos.get("pnl", 0))
+                    content += f"• **{ticker}**: {qty:.0f} shares @ ${price:.2f} = ${value:,.0f} (P&L: ${pnl:+,.0f})\n"
+            else:
+                content = "📊 **Your Portfolio**\n\nYour portfolio is currently **all cash** with no stock positions open. You have the buying power to start investing!"
+            
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": "📊 **Your Current Portfolio**\n\nHere's your asset allocation and portfolio composition analysis:",
-                "chart": data.get("allocation_chart")
+                "content": content,
+                "chart": data.get("allocation_chart") if data.get("allocation_chart") else None
             })
 
         elif intent == "correlation" and len(tickers) >= 2:
