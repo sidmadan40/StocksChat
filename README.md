@@ -87,15 +87,25 @@ This retrieved context is embedded into the chat/system prompt so model outputs 
 
 ![StocksChat Home](screenshots/01-home.png)
 
-### Query and Response (Real Example)
+### Query: Current Stocks Position and Value (Charts + Tables)
 
-Query: Why did we buy Netflix?
+Query: what is my current stocks position and value show all the charts and tables
+
+![Portfolio Position and Value](screenshots/05-portfolio-position-value.png)
+
+### Query: Why Did We Buy ON and URI?
+
+Query: why did we buy ON and URI
+
+![Why We Bought ON and URI](screenshots/06-why-buy-on-uri.png)
+
+### Additional Query/Response View
 
 ![StocksChat Query Response](screenshots/02-query-response.png)
 
 ## Demo GIF
 
-Quick chat flow demo (home -> query -> response):
+Quick chat flow demo (home -> portfolio query -> ON/URI reasoning):
 
 ![StocksChat Demo](screenshots/04-demo-chat-flow.gif)
 

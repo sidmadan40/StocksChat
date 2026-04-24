@@ -11,6 +11,7 @@ import yfinance as yf
 from datetime import datetime
 import json
 from pathlib import Path
+from collections import defaultdict
 
 if __package__ in (None, ""):
     backend_package = types.ModuleType("backend")
@@ -83,6 +84,78 @@ def write_trades_log(trades: List[dict]):
             json.dump(trades, f, indent=2)
     except Exception as e:
         print(f"Error writing trades log: {e}")
+
+
+def _build_positions_from_trade_log(trades: List[dict]) -> List[dict]:
+    """Fallback: derive open positions from trade history when broker positions are unavailable."""
+    if not trades:
+        return []
+
+    aggregated = defaultdict(lambda: {"qty": 0.0, "cost": 0.0})
+
+    for trade in trades:
+        ticker = str(trade.get("ticker", "")).upper().strip()
+        if not ticker:
+            continue
+
+        action = str(trade.get("action", "")).upper().strip()
+        qty = float(trade.get("quantity", trade.get("qty", 0)) or 0)
+        price = float(trade.get("price", 0) or 0)
+
+        if qty <= 0:
+            continue
+
+        if action == "BUY":
+            aggregated[ticker]["qty"] += qty
+            aggregated[ticker]["cost"] += price * qty
+        elif action == "SELL":
+            current_qty = aggregated[ticker]["qty"]
+            if current_qty <= 0:
+                continue
+            sell_qty = min(qty, current_qty)
+            avg_cost = aggregated[ticker]["cost"] / current_qty if current_qty > 0 else 0
+            aggregated[ticker]["qty"] -= sell_qty
+            aggregated[ticker]["cost"] -= avg_cost * sell_qty
+
+    fallback_positions: List[dict] = []
+    for ticker, data in aggregated.items():
+        qty = float(data["qty"])
+        if qty <= 0:
+            continue
+
+        avg_fill_price = float(data["cost"] / qty) if qty > 0 else 0.0
+        current_price = avg_fill_price
+        try:
+            info = yf.Ticker(ticker).info or {}
+            maybe_price = info.get("currentPrice")
+            if maybe_price is not None:
+                current_price = float(maybe_price)
+        except Exception:
+            pass
+
+        pnl = (current_price - avg_fill_price) * qty
+        pnl_percent = ((current_price / avg_fill_price) - 1.0) * 100 if avg_fill_price > 0 else 0.0
+        fallback_positions.append({
+            "ticker": ticker,
+            "qty": qty,
+            "avg_fill_price": avg_fill_price,
+            "current_price": current_price,
+            "pnl": pnl,
+            "pnl_percent": pnl_percent,
+        })
+
+    return fallback_positions
+
+
+def _get_live_positions_with_fallback() -> List[dict]:
+    """Return broker positions, or rebuild from trade logs when broker reports empty positions."""
+    portfolio_data = get_alpaca_portfolio()
+    live_positions = portfolio_data.get("positions", []) if isinstance(portfolio_data, dict) else []
+    if live_positions:
+        return live_positions
+
+    trades = read_trades_log()
+    return _build_positions_from_trade_log(trades)
 
 def log_trade(
     ticker: str,
@@ -393,8 +466,11 @@ def get_portfolio():
             raise RuntimeError(portfolio_data["error"])
         
         cash = float(portfolio_data.get("cash", 0.0))
-        positions = portfolio_data.get("positions", [])
+        total_portfolio_value = float(portfolio_data.get("total_portfolio_value", 0.0))
+        positions = _get_live_positions_with_fallback()
         total_pnl = float(portfolio_data.get("total_pnl", 0.0))
+        if not positions:
+            total_pnl = 0.0
         
         # Build allocation chart
         labels = []
@@ -410,6 +486,10 @@ def get_portfolio():
             if market_value > 0:
                 labels.append(ticker)
                 values.append(market_value)
+
+        invested_value = sum(values[1:]) if labels and labels[0] == "Cash" else sum(values)
+        if invested_value <= 0:
+            invested_value = max(total_portfolio_value - cash, 0.0)
         
         # Create pie chart
         if labels and values:
@@ -437,6 +517,8 @@ def get_portfolio():
             "status": "success",
             "portfolio": {
                 "cash": cash,
+                "invested_value": invested_value,
+                "total_portfolio_value": total_portfolio_value,
                 "positions": positions,
                 "total_pnl": total_pnl,
                 "num_positions": len(positions)
@@ -477,12 +559,14 @@ def portfolio_live():
 
         cash = float(portfolio_data.get("cash", 0.0))
         total_portfolio_value = float(portfolio_data.get("total_portfolio_value", 0.0))
-        positions = portfolio_data.get("positions", [])
+        positions = _get_live_positions_with_fallback()
         
         # Calculate invested amount from positions
         invested_value = 0.0
         for pos in positions:
             invested_value += float(pos.get("current_price", 0.0)) * float(pos.get("qty", 0.0))
+        if invested_value <= 0:
+            invested_value = max(total_portfolio_value - cash, 0.0)
         
         total_pnl = float(portfolio_data.get("total_pnl", 0.0))
         total_pnl_percent = float(portfolio_data.get("total_pnl_percent", 0.0))

@@ -174,6 +174,20 @@ def is_trade_decision_query(prompt: str) -> bool:
     return any(phrase in lowered for phrase in phrases)
 
 
+def is_portfolio_query(prompt: str) -> bool:
+    lowered = prompt.lower()
+    phrases = [
+        "portfolio",
+        "what do i own",
+        "what stocks do i own",
+        "my holdings",
+        "owned stocks",
+        "asset allocation",
+        "positions",
+    ]
+    return any(phrase in lowered for phrase in phrases)
+
+
 def resolve_query_ticker(prompt: str, routed_tickers=None):
     """Resolve a ticker from route output or recent trade/company names in the prompt."""
     routed_tickers = routed_tickers or []
@@ -303,8 +317,6 @@ if "pnl_history" not in st.session_state:
 
 def show_portfolio_panel():
     """Display live Alpaca portfolio with metrics, pie chart, and holdings list."""
-    st.subheader("💼 Portfolio")
-    
     with st.spinner("Loading portfolio..."):
         data, error = safe_api_call(PORTFOLIO_LIVE_API_URL)
     
@@ -328,11 +340,16 @@ def show_portfolio_panel():
     pnl_data = portfolio.get("pnl", {})
     total_pnl = pnl_data.get("total", 0.0)
     pnl_percent = pnl_data.get("percent", 0.0)
+
+    # Keep sidebar math consistent: cash reserve shown as total value minus invested amount.
+    display_cash_reserve = cash
+    if total_portfolio_value > 0:
+        display_cash_reserve = max(total_portfolio_value - invested_value, 0.0)
     
     # (1) Top metrics - reorganized
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("💰 Cash Reserve", f"${cash:,.0f}")
+        st.metric("💰 Cash Reserve", f"${display_cash_reserve:,.0f}")
     with col2:
         st.metric("📊 Invested", f"${invested_value:,.0f}")
     
@@ -352,9 +369,9 @@ def show_portfolio_panel():
         colors = []
         
         # Add cash
-        if cash > 0:
+        if display_cash_reserve > 0:
             labels.append("Cash Reserve")
-            values.append(cash)
+            values.append(display_cash_reserve)
             colors.append("#64748b")
         
         # Add positions
@@ -387,7 +404,7 @@ def show_portfolio_panel():
                 font=dict(color="#facc15", size=11),
                 showlegend=False
             )
-            st.plotly_chart(fig_pie, use_container_width=True, key=f"portfolio_pie_{datetime.now().timestamp()}")
+            st.plotly_chart(fig_pie, use_container_width=True, key="portfolio_pie")
         else:
             st.info("⚠️ No portfolio data available yet")
     except Exception as e:
@@ -684,6 +701,8 @@ with left:
         tickers = route.get("tickers", [])
         ticker = tickers[0] if tickers else None
 
+        force_portfolio = is_portfolio_query(prompt)
+
         if is_trade_decision_query(prompt):
             resolved_ticker = resolve_query_ticker(prompt, tickers)
             with st.spinner("Analyzing..."):
@@ -719,7 +738,7 @@ with left:
                 
                 st.session_state.messages.append(msg)
 
-        elif intent == "portfolio":
+        elif intent == "portfolio" or force_portfolio:
             with st.spinner("Fetching portfolio..."):
                 try:
                     res = requests.get(PORTFOLIO_API_URL, timeout=10)
@@ -731,7 +750,7 @@ with left:
             num_positions = portfolio_info.get("num_positions", 0)
             
             if num_positions > 0:
-                content = f"📊 **Your Portfolio**\n\nYou currently own **{num_positions} position(s)**:\n\n"
+                content = f"📊 **Your Current Portfolio**\n\nYou currently own **{num_positions} stock position(s)**:\n\n"
                 for pos in portfolio_info.get("positions", []):
                     ticker = pos.get("ticker", "?")
                     qty = float(pos.get("qty", 0))
@@ -740,7 +759,7 @@ with left:
                     pnl = float(pos.get("pnl", 0))
                     content += f"• **{ticker}**: {qty:.0f} shares @ ${price:.2f} = ${value:,.0f} (P&L: ${pnl:+,.0f})\n"
             else:
-                content = "📊 **Your Portfolio**\n\nYour portfolio is currently **all cash** with no stock positions open. You have the buying power to start investing!"
+                content = "📊 **Your Current Portfolio**\n\nYour portfolio is currently **all cash** with no open stock positions."
             
             st.session_state.messages.append({
                 "role": "assistant",
@@ -831,11 +850,11 @@ with left:
 
 # ---------------- RIGHT (PORTFOLIO STATS) ----------------
 with right:
-    st.markdown("### 💼 Portfolio")
-    
     # Refresh button
     if st.button("🔄 Refresh", use_container_width=True, key="refresh_portfolio"):
         st.rerun()
+
+    st.markdown("### 💼 Portfolio Summary")
     
     # Show portfolio with error handling
     try:

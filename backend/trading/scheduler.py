@@ -5,9 +5,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import logging
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 import json
+from zoneinfo import ZoneInfo
 
 # Import trading functions
 from backend.trading.news import get_news
@@ -24,18 +25,21 @@ logger = logging.getLogger(__name__)
 
 
 STATE_FILE = Path(__file__).resolve().parents[1] / "data" / "trading_cycle_state.json"
+NYSE_TZ = ZoneInfo("America/New_York")
+NYSE_OPEN = time(hour=9, minute=30)
+NYSE_CLOSE = time(hour=16, minute=0)
 
 
 def _default_state() -> Dict:
     return {
-        "date": datetime.now().date().isoformat(),
+        "hour_bucket": "",
         "executions": 0,
-        "max_per_day": 6,
+        "max_per_hour": 6,
     }
 
 
 def _load_state() -> Dict:
-    """Load persisted daily execution state."""
+    """Load persisted hourly execution state."""
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         if not STATE_FILE.exists():
@@ -48,14 +52,15 @@ def _load_state() -> Dict:
         if isinstance(raw, dict):
             state.update(raw)
         state["executions"] = int(state.get("executions", 0) or 0)
-        state["max_per_day"] = int(state.get("max_per_day", 6) or 6)
+        state["max_per_hour"] = int(state.get("max_per_hour", raw.get("max_per_day", 6)) or 6)
+        state["hour_bucket"] = str(state.get("hour_bucket", "") or "")
         return state
     except Exception:
         return _default_state()
 
 
 def _save_state(state: Dict) -> None:
-    """Persist daily execution state."""
+    """Persist hourly execution state."""
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -565,30 +570,35 @@ def run_trading_cycle(ticker: str = "AAPL") -> Dict:
 _trading_cycle_state = _load_state()
 
 
-def reset_trading_cycle_count():
-    """Reset daily trading cycle execution counter."""
-    _trading_cycle_state["date"] = datetime.now().date().isoformat()
+def _is_nyse_market_open(now_et: datetime) -> bool:
+    """Return True when current ET time is within regular NYSE market hours (Mon-Fri, 9:30-16:00)."""
+    if now_et.weekday() >= 5:
+        return False
+    current_time = now_et.time()
+    return NYSE_OPEN <= current_time <= NYSE_CLOSE
+
+
+def reset_trading_cycle_count(hour_bucket: str):
+    """Reset per-hour trading cycle execution counter."""
+    _trading_cycle_state["hour_bucket"] = hour_bucket
     _trading_cycle_state["executions"] = 0
     _save_state(_trading_cycle_state)
 
 
 def _trading_cycle_wrapper():
-    """Wrapper that runs run_ai_trade_cycle with daily execution limits."""
-    today = datetime.now().date()
-    state_date = _trading_cycle_state.get("date", today.isoformat())
-    try:
-        tracked_date = datetime.fromisoformat(state_date).date()
-    except Exception:
-        tracked_date = today
-    
-    # Reset if new day
-    if tracked_date < today:
-        reset_trading_cycle_count()
-    
-    # Check if we can execute
-    if _trading_cycle_state["executions"] >= _trading_cycle_state["max_per_day"]:
+    """Run trade cycle up to 6 times per ET hour while NYSE is open."""
+    now_et = datetime.now(NYSE_TZ)
+    if not _is_nyse_market_open(now_et):
+        logger.info("Skipping cycle: NYSE market is closed")
+        return
+
+    hour_bucket = now_et.strftime("%Y-%m-%d %H")
+    if _trading_cycle_state.get("hour_bucket") != hour_bucket:
+        reset_trading_cycle_count(hour_bucket)
+
+    if _trading_cycle_state["executions"] >= _trading_cycle_state["max_per_hour"]:
         logger.info(
-            f"Daily cycle limit reached: {_trading_cycle_state['executions']}/{_trading_cycle_state['max_per_day']}"
+            f"Hourly cycle limit reached: {_trading_cycle_state['executions']}/{_trading_cycle_state['max_per_hour']}"
         )
         return
     
@@ -598,32 +608,32 @@ def _trading_cycle_wrapper():
         _trading_cycle_state["executions"] += 1
         _save_state(_trading_cycle_state)
         logger.info(
-            f"AI cycle execution {_trading_cycle_state['executions']}/{_trading_cycle_state['max_per_day']}"
+            f"AI cycle execution {_trading_cycle_state['executions']}/{_trading_cycle_state['max_per_hour']} for {hour_bucket} ET"
         )
     except Exception as e:
         logger.error(f"AI cycle wrapper error: {e}")
 
 
-def schedule_trading_cycles(scheduler: TradingScheduler, interval_hours: int = 2) -> str:
+def schedule_trading_cycles(scheduler: TradingScheduler, interval_minutes: int = 10) -> str:
     """
     Schedule trading cycles to run at regular intervals.
     
     Args:
         scheduler: TradingScheduler instance
-        interval_hours: Interval between executions in hours (default: 2)
+        interval_minutes: Interval between execution attempts in minutes (default: 10)
     
     Returns:
         Job ID
     """
-    job_id = f"trading_cycle_{interval_hours}h"
+    job_id = f"trading_cycle_{interval_minutes}m"
     
     try:
         job_id = scheduler.add_interval_job(
             _trading_cycle_wrapper,
-            minutes=interval_hours * 60,
+            minutes=interval_minutes,
             job_id=job_id
         )
-        logger.info(f"Scheduled trading cycles every {interval_hours} hours")
+        logger.info(f"Scheduled trading cycle checks every {interval_minutes} minutes")
         return job_id
     except Exception as e:
         logger.error(f"Error scheduling trading cycles: {e}")
@@ -646,17 +656,17 @@ def start_trading_scheduler() -> TradingScheduler:
     """
     Start the global trading scheduler with trading cycles.
     
-    Automatically schedules trading cycles to run every 1 hour,
-    limited to 6 executions per day.
+    Automatically schedules cycle checks every 10 minutes, and executes
+    up to 6 cycles per ET hour during regular NYSE market hours.
     """
     scheduler = get_scheduler()
     
-    # Schedule trading cycles (every 1 hour, max 6/day)
+    # Schedule trading cycle checks every 10 minutes.
     try:
         existing_jobs = scheduler.get_jobs()
-        if "trading_cycle_1h" not in existing_jobs:
-            schedule_trading_cycles(scheduler, interval_hours=1)
-            logger.info("Trading cycles scheduled: every 1 hour (max 6/day)")
+        if "trading_cycle_10m" not in existing_jobs:
+            schedule_trading_cycles(scheduler, interval_minutes=10)
+            logger.info("Trading cycles scheduled: 6/hour during NYSE open hours")
     except Exception as e:
         logger.error(f"Error scheduling cycles in start_trading_scheduler: {e}")
 
