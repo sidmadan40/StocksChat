@@ -10,6 +10,7 @@ from google import genai
 import yfinance as yf
 from datetime import datetime
 import json
+import re
 from pathlib import Path
 from collections import defaultdict
 
@@ -306,6 +307,100 @@ def get_recent_trades_context() -> str:
         return f"Error fetching trades: {str(e)[:100]}"
 
 
+def extract_prompt_tickers(prompt: str) -> List[str]:
+    """Extract ticker-like symbols from user prompt."""
+    if not prompt:
+        return []
+    tickers = re.findall(r"\b[A-Z]{1,5}\b", prompt.upper())
+    # Keep order while deduplicating
+    return list(dict.fromkeys(tickers))
+
+
+def get_trade_context_for_prompt(prompt: str) -> str:
+    """Build trade context with both recent history and ticker-specific history from full log."""
+    try:
+        trades = read_trades_log()
+        if not trades:
+            return "No recent trades."
+
+        context = "Recent Trades (last 20):\n"
+        for trade in trades[-20:]:
+            timestamp = trade.get('timestamp', '')
+            try:
+                dt = datetime.fromisoformat(timestamp)
+                time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                time_str = timestamp
+
+            ticker = trade.get('ticker', 'UNKNOWN')
+            action = trade.get('action', '?')
+            qty = trade.get('quantity', trade.get('qty', 0))
+            decision = trade.get('decision', {}) if isinstance(trade.get('decision', {}), dict) else {}
+            reason = trade.get('reason', decision.get('reason', ''))
+            confidence = decision.get('confidence')
+            sentiment = trade.get('sentiment', {}) if isinstance(trade.get('sentiment', {}), dict) else {}
+            regime = trade.get('regime', {}) if isinstance(trade.get('regime', {}), dict) else {}
+            explanation = trade.get('explanation', '')
+
+            context += f"  - {time_str}: {action} {qty} {ticker}"
+            if reason:
+                context += f" ({reason})"
+            if confidence is not None:
+                context += f" | confidence={confidence:.2f}"
+            context += "\n"
+            if sentiment:
+                context += (
+                    f"    Sentiment: {sentiment.get('label', 'neutral')} "
+                    f"({sentiment.get('score', 0.0):.2f})\n"
+                )
+            if regime:
+                context += (
+                    f"    Regime: {regime.get('regime', 'neutral')} "
+                    f"({regime.get('confidence', 0.0):.2f})\n"
+                )
+            if explanation:
+                context += f"    Explanation: {explanation}\n"
+
+        requested_tickers = extract_prompt_tickers(prompt)
+        if requested_tickers:
+            context += "\nTicker-specific trade history from full log:\n"
+            for requested_ticker in requested_tickers:
+                ticker_trades = [
+                    trade for trade in trades
+                    if str(trade.get("ticker", "")).upper() == requested_ticker
+                ]
+
+                if not ticker_trades:
+                    context += f"  - {requested_ticker}: No trade records found in current trade log.\n"
+                    continue
+
+                context += f"\n  {requested_ticker} (last {min(len(ticker_trades), 15)} of {len(ticker_trades)} entries):\n"
+                for trade in ticker_trades[-15:]:
+                    timestamp = trade.get('timestamp', '')
+                    try:
+                        dt = datetime.fromisoformat(timestamp)
+                        time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        time_str = timestamp
+
+                    action = trade.get('action', '?')
+                    qty = trade.get('quantity', trade.get('qty', 0))
+                    decision = trade.get('decision', {}) if isinstance(trade.get('decision', {}), dict) else {}
+                    reason = trade.get('reason', decision.get('reason', ''))
+                    explanation = trade.get('explanation', '')
+
+                    context += f"    - {time_str}: {action} {qty} {requested_ticker}"
+                    if reason:
+                        context += f" ({reason})"
+                    context += "\n"
+                    if explanation:
+                        context += f"      Explanation: {explanation}\n"
+
+        return context
+    except Exception as e:
+        return f"Error fetching trades: {str(e)[:100]}"
+
+
 def get_market_news_context(tickers: List[str] = None) -> str:
     """Get latest news for portfolio holdings or specified tickers."""
     try:
@@ -351,7 +446,7 @@ def general_chat(request: ChatRequest):
     try:
         # Gather context
         portfolio_context = get_portfolio_context()
-        trades_context = get_recent_trades_context()
+        trades_context = get_trade_context_for_prompt(request.prompt)
         news_context = get_market_news_context()
         
         # Build system prompt with context
@@ -372,7 +467,8 @@ Guidelines:
 - If asked about portfolio performance, use actual P&L and position data
 - Provide market insights based on current holdings
 - Be specific with numbers from the portfolio context
-- If the answer depends on a specific ticker, cite the logged action, reason, sentiment, regime, and explanation in plain English"""
+- If the answer depends on a specific ticker, prioritize the ticker-specific full-log section and cite the logged action, reason, sentiment, regime, and explanation in plain English
+- If no ticker-specific trades exist in the current log, say that clearly and avoid claiming a trade happened unless it appears in the provided context"""
         
         client = get_gemini_client()
         if client is None:
