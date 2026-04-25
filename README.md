@@ -36,27 +36,27 @@ StocksChat uses a practical retrieval-augmented generation (RAG) pattern and Lan
 
 ```mermaid
 flowchart TD
-	A[Start: User Query or Scheduler Tick]
-	A --> B[Route Query: Optional Intent Router API /route (Groq)]
-	B --> C[Retrieve Context: Alpaca API + trades.json + Yahoo Finance news API]
-	C --> D[Initialize LangGraph State: ticker, context, trace]
+	A[Start User Query Or Scheduler Tick]
+	A --> B[Optional Intent Routing Using Groq Route API]
+	B --> C[Retrieve Context From Alpaca Trades Log And Yahoo Finance]
+	C --> D[Initialize LangGraph State With Ticker Context And Trace]
 
-	D --> E[Sentiment Node: Gemini API + news headlines]
-	D --> F[Regime Node: hmmlearn HMM + Yahoo Finance price history API]
-	D --> G[Technical Node: pandas indicators on Yahoo Finance OHLC API]
+	D --> E[Sentiment Node Using Gemini And News Headlines]
+	D --> F[Regime Node Using Hmmlearn And Yahoo Finance Prices]
+	D --> G[Technical Node Using Pandas And Yahoo Finance OHLC]
 
-	E --> H[Decision Node: Python strategy rules + confidence score]
+	E --> H[Decision Node Using Python Strategy Rules And Confidence]
 	F --> H
 	G --> H
 
-	H --> I[Log Decision: trades.json]
-	I --> J{Action?}
-	J -->|BUY/SELL| K[Execute Paper Trade: Alpaca Trading API]
+	H --> I[Log Decision To Trades Json]
+	I --> J{Action}
+	J -->|BUY OR SELL| K[Execute Paper Trade Using Alpaca Trading API]
 	J -->|HOLD| L[Skip Execution]
 
-	K --> M[Log Execution Result: trades.json]
+	K --> M[Log Execution Result To Trades Json]
 	L --> M
-	M --> N[Final Response: FastAPI /chat using Gemini API]
+	M --> N[Final Response Through FastAPI Chat Endpoint With Gemini]
 ```
 
 ### LangGraph Workflow
