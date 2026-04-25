@@ -36,41 +36,36 @@ StocksChat uses a practical retrieval-augmented generation (RAG) pattern and Lan
 
 ```mermaid
 flowchart TD
-	A[Start: User Query / Scheduled Cycle] --> B[Load State]
-	B --> C[Retrieve Context]
-	C --> C1[Portfolio Snapshot]
-	C --> C2[Recent Trade Logs]
-	C --> C3[Market News]
+	A[Start: User Query or Scheduler Tick]
+	A --> B[Route Query: Optional Intent Router API /route (Groq)]
+	B --> C[Retrieve Context: Alpaca API + trades.json + Yahoo Finance news API]
+	C --> D[Initialize LangGraph State: ticker, context, trace]
 
-	C1 --> D[LangGraph Analysis Graph]
-	C2 --> D
-	C3 --> D
+	D --> E[Sentiment Node: Gemini API + news headlines]
+	D --> F[Regime Node: hmmlearn HMM + Yahoo Finance price history API]
+	D --> G[Technical Node: pandas indicators on Yahoo Finance OHLC API]
 
-	D --> E[Sentiment Analysis]
-	D --> F[Market Regime Detection]
-	D --> G[Technical/Signal Aggregation]
-
-	E --> H[Decision Node]
+	E --> H[Decision Node: Python strategy rules + confidence score]
 	F --> H
 	G --> H
-	H --> L[Log Decision + Explanation]
 
-	L --> I{Action}
-	I -->|BUY/SELL| J[Paper Trade via Alpaca]
-	I -->|HOLD| K[No Trade]
+	H --> I[Log Decision: trades.json]
+	I --> J{Action?}
+	J -->|BUY/SELL| K[Execute Paper Trade: Alpaca Trading API]
+	J -->|HOLD| L[Skip Execution]
 
-	J --> N[Log Execution Result]
-	K --> N
-	N --> M[Chat/Endpoint Response]
+	K --> M[Log Execution Result: trades.json]
+	L --> M
+	M --> N[Final Response: FastAPI /chat using Gemini API]
 ```
 
 ### LangGraph Workflow
 
-1. StocksChat initializes a state object for a ticker or a shortlisted universe.
-2. The LangGraph graph runs node-by-node analysis (signals, sentiment, regime, and decision logic).
-3. Node outputs are merged into a single decision payload with confidence and reasoning.
-4. The workflow executes BUY/SELL/HOLD behavior and logs a full explanation for later audit.
-5. The final state is returned to API/chat consumers for user-facing responses.
+1. Retrieve live context: portfolio (Alpaca API), trade history (trades.json), and news/prices (Yahoo Finance API).
+2. Build the LangGraph state and run analysis nodes in parallel: sentiment (Gemini API), regime (hmmlearn), and technicals (pandas).
+3. Merge node outputs into one decision payload (action, confidence, reason).
+4. Log the decision first, then execute BUY/SELL through Alpaca API (or HOLD), and log execution outcome.
+5. Return user-facing explanation through FastAPI endpoints, with Gemini used for natural-language reasoning.
 
 ### How RAG Is Used
 
